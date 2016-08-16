@@ -1049,9 +1049,9 @@ function gymLabel (teamName, teamId, gymPoints, latitude, longitude) {
   return str
 }
 
-function pokestopLabel (lured, lastModified, activePokemonId, latitude, longitude) {
+function pokestopLabel (expireTime, activePokemonId, latitude, longitude) {
   var str
-  if (lured) {
+  if (expireTime) {
     var activePokemonName = activePokemonId in idToPokemon ? idToPokemon[activePokemonId]['name'] : ''
     var activePokemonRarity = activePokemonId in idToPokemon ? idToPokemon[activePokemonId]['rarity'] : ''
     var activePokemonTypes = activePokemonId in idToPokemon ? idToPokemon[activePokemonId]['types'] : ''
@@ -1060,13 +1060,8 @@ function pokestopLabel (lured, lastModified, activePokemonId, latitude, longitud
     $.each(activePokemonTypes, function (index, type) {
       typesDisplay += getTypeSpan(type)
     })
-    var lastModifiedDate = new Date(lastModified)
-    var currentDate = new Date()
 
-    var timeUntilExpire = currentDate.getTime() - lastModifiedDate.getTime()
-
-    var expireDate = new Date(currentDate.getTime() + timeUntilExpire)
-    var expireTime = expireDate.getTime()
+    var expireDate = new Date(expireTime)
     if(activePokemonId == null){
       str = `
         <div>
@@ -1233,7 +1228,7 @@ function setupPokestopMarker (item) {
   })
 
   marker.infoWindow = new google.maps.InfoWindow({
-    content: pokestopLabel(!!item['lure_expiration'], item['last_modified'], item['active_pokemon_id'], item['latitude'], item['longitude']),
+    content: pokestopLabel(item['lure_expiration'], item['active_pokemon_id'], item['latitude'], item['longitude']),
     disableAutoPan: true
   })
 

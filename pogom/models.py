@@ -341,6 +341,10 @@ def parse_map(map_dict, step_location):
                 if 'active_fort_modifier' in f:
                     lure_expiration = datetime.utcfromtimestamp(
                          f['last_modified_timestamp_ms'] / 1000.0) + timedelta(minutes=30)
+
+                    diff = lure_expiration - now
+                    if diff.total_seconds() < 0:
+                        lure_expiration = None
                 else:
                     lure_expiration = None
 

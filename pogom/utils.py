@@ -12,10 +12,6 @@ import shutil
 import requests
 import platform
 
-from importlib import import_module
-from s2sphere import LatLng, CellId
-from geopy.geocoders import GoogleV3
-
 from . import config
 
 log = logging.getLogger(__name__)
@@ -33,6 +29,20 @@ def verify_config_file_exists(filename):
         shutil.copy2(fullpath + '.example', fullpath)
 
 
+def memoize(function):
+    memo = {}
+
+    def wrapper(*args):
+        if args in memo:
+            return memo[args]
+        else:
+            rv = function(*args)
+            memo[args] = rv
+            return rv
+    return wrapper
+
+
+@memoize
 def get_args():
     # fuck PEP8
     configpath = os.path.join(os.path.dirname(__file__), '../config/config.ini')
@@ -84,7 +94,7 @@ def get_args():
     parser.add_argument('-os', '--only-server',
                         help='Server-Only Mode. Starts only the Webserver without the searcher.',
                         action='store_true', default=False)
-    parser.add_argument('-nsc','--no-search-control',
+    parser.add_argument('-nsc', '--no-search-control',
                         help='Disables search control',
                         action='store_false', dest='search_control', default=True)
     parser.add_argument('-fl', '--fixed-location',
@@ -93,6 +103,8 @@ def get_args():
     parser.add_argument('-k', '--gmaps-key',
                         help='Google Maps Javascript API Key',
                         required=True)
+    parser.add_argument('--spawnpoints-only', help='Only scan locations with spawnpoints in them.',
+                        action='store_true', default=False)
     parser.add_argument('-C', '--cors', help='Enable CORS on web server',
                         action='store_true', default=False)
     parser.add_argument('-D', '--db', help='Database filename',
@@ -109,6 +121,14 @@ def get_args():
     parser.add_argument('-nk', '--no-pokestops',
                         help='Disables PokeStops from the map (including parsing them into local db)',
                         action='store_true', default=False)
+    parser.add_argument('-ss', '--spawnpoint-scanning',
+                        help='Use spawnpoint scanning (instead of hex grid)', nargs='?', const='null.null', default=None)
+    parser.add_argument('--dump-spawnpoints', help='dump the spawnpoints from the db to json (only for use with -ss)',
+                        action='store_true', default=False)
+    parser.add_argument('-pd', '--purge-data',
+                        help='Clear pokemon from database this many hours after they disappear \
+                        (0 to disable)', type=int, default=0)
+    parser.add_argument('-px', '--proxy', help='Proxy url (e.g. socks5://127.0.0.1:9050)')
     parser.add_argument('--db-type', help='Type of database to be used (default: sqlite)',
                         default='sqlite')
     parser.add_argument('--db-name', help='Name of the database to be used')
@@ -116,9 +136,12 @@ def get_args():
     parser.add_argument('--db-pass', help='Password for the database')
     parser.add_argument('--db-host', help='IP or hostname for the database')
     parser.add_argument('--db-port', help='Port for the database', type=int, default=3306)
-    parser.add_argument('--db-max_connections', help='Max connections for the database', type=int, default=5)
+    parser.add_argument('--db-max_connections', help='Max connections (per thread) for the database',
+                        type=int, default=5)
     parser.add_argument('-wh', '--webhook', help='Define URL(s) to POST webhook information to',
                         nargs='*', default=False, dest='webhooks')
+    parser.add_argument('--ssl-certificate', help='Path to SSL certificate file')
+    parser.add_argument('--ssl-privatekey', help='Path to SSL private key file')
     parser.set_defaults(DEBUG=False)
 
     args = parser.parse_args()
@@ -126,29 +149,36 @@ def get_args():
     if args.only_server:
         if args.location is None:
             parser.print_usage()
-            print sys.argv[0] + ': error: arguments -l/--location is required'
+            print(sys.argv[0] + ": error: arguments -l/--location is required")
             sys.exit(1)
     else:
         errors = []
 
+        num_auths = 1
+        num_usernames = 0
+        num_passwords = 0
+
         if (args.username is None):
             errors.append('Missing `username` either as -u/--username or in config')
+        else:
+            num_usernames = len(args.username)
 
         if (args.location is None):
             errors.append('Missing `location` either as -l/--location or in config')
 
         if (args.password is None):
             errors.append('Missing `password` either as -p/--password or in config')
+        else:
+            num_passwords = len(args.password)
 
         if (args.step_limit is None):
             errors.append('Missing `step_limit` either as -st/--step-limit or in config')
 
         if args.auth_service is None:
             args.auth_service = ['ptc']
+        else:
+            num_auths = len(args.auth_service)
 
-        num_auths = len(args.auth_service)
-        num_usernames = len(args.username)
-        num_passwords = len(args.password)
         if num_usernames > 1:
             if num_passwords > 1 and num_usernames != num_passwords:
                 errors.append('The number of provided passwords ({}) must match the username count ({})'.format(num_passwords, num_usernames))
@@ -157,14 +187,14 @@ def get_args():
 
         if len(errors) > 0:
             parser.print_usage()
-            print sys.argv[0] + ": errors: \n - " + "\n - ".join(errors)
+            print(sys.argv[0] + ": errors: \n - " + "\n - ".join(errors))
             sys.exit(1)
 
         # Fill the pass/auth if set to a single value
         if num_passwords == 1:
-            args.password = [ args.password[0] ] * num_usernames
+            args.password = [args.password[0]] * num_usernames
         if num_auths == 1:
-            args.auth_service = [ args.auth_service[0] ] * num_usernames
+            args.auth_service = [args.auth_service[0]] * num_usernames
 
         # Make our accounts list
         args.accounts = []
@@ -182,7 +212,7 @@ def insert_mock_data(position):
     num_gym = 6
 
     log.info('Creating fake: %d pokemon, %d pokestops, %d gyms',
-        num_pokemon, num_pokestop, num_gym)
+             num_pokemon, num_pokestop, num_gym)
 
     from .models import Pokemon, Pokestop, Gym
     from .search import generate_location_steps
@@ -197,7 +227,7 @@ def insert_mock_data(position):
     for i in range(1, num_pokemon):
         Pokemon.create(encounter_id=uuid.uuid4(),
                        spawnpoint_id='sp{}'.format(i),
-                       pokemon_id=(i+1) % 150,
+                       pokemon_id=(i + 1) % 150,
                        latitude=locations[i][0],
                        longitude=locations[i][1],
                        disappear_time=disappear_time,
@@ -206,24 +236,24 @@ def insert_mock_data(position):
     for i in range(1, num_pokestop):
         Pokestop.create(pokestop_id=uuid.uuid4(),
                         enabled=True,
-                        latitude=locations[i+num_pokemon][0],
-                        longitude=locations[i+num_pokemon][1],
+                        latitude=locations[i + num_pokemon][0],
+                        longitude=locations[i + num_pokemon][1],
                         last_modified=datetime.now(),
                         # Every other pokestop be lured
                         lure_expiration=disappear_time if (i % 2 == 0) else None,
-                        active_pokemon_id=i
                         )
 
     for i in range(1, num_gym):
         Gym.create(gym_id=uuid.uuid4(),
                    team_id=i % 3,
-                   guard_pokemon_id=(i+1) % 150,
+                   guard_pokemon_id=(i + 1) % 150,
                    latitude=locations[i + num_pokemon + num_pokestop][0],
                    longitude=locations[i + num_pokemon + num_pokestop][1],
                    last_modified=datetime.now(),
                    enabled=True,
                    gym_points=1000
                    )
+
 
 def i8ln(word):
     if config['LOCALE'] == "en":
@@ -245,6 +275,7 @@ def i8ln(word):
         log.debug('Unable to find translation for "%s" in locale %s!', word, config['LOCALE'])
         return word
 
+
 def get_pokemon_data(pokemon_id):
     if not hasattr(get_pokemon_data, 'pokemon'):
         file_path = os.path.join(
@@ -256,15 +287,19 @@ def get_pokemon_data(pokemon_id):
             get_pokemon_data.pokemon = json.loads(f.read())
     return get_pokemon_data.pokemon[str(pokemon_id)]
 
+
 def get_pokemon_name(pokemon_id):
     return i8ln(get_pokemon_data(pokemon_id)['name'])
+
 
 def get_pokemon_rarity(pokemon_id):
     return i8ln(get_pokemon_data(pokemon_id)['rarity'])
 
+
 def get_pokemon_types(pokemon_id):
     pokemon_types = get_pokemon_data(pokemon_id)['types']
     return map(lambda x: {"type": i8ln(x['type']), "color": x['color']}, pokemon_types)
+
 
 def send_to_webhook(message_type, message):
     args = get_args()
@@ -285,34 +320,45 @@ def send_to_webhook(message_type, message):
             except requests.exceptions.RequestException as e:
                 log.debug(e)
 
+
 def get_encryption_lib_path():
-    lib_path = ""
     # win32 doesn't mean necessarily 32 bits
     if sys.platform == "win32" or sys.platform == "cygwin":
         if platform.architecture()[0] == '64bit':
-            lib_path = os.path.join(os.path.dirname(__file__), "encrypt64bit.dll")
+            lib_name = "encrypt64bit.dll"
         else:
-            lib_path = os.path.join(os.path.dirname(__file__), "encrypt32bit.dll")
+            lib_name = "encrypt32bit.dll"
 
     elif sys.platform == "darwin":
-        lib_path = os.path.join(os.path.dirname(__file__), "libencrypt-osx-64.so")
+        lib_name = "libencrypt-osx-64.so"
 
     elif os.uname()[4].startswith("arm") and platform.architecture()[0] == '32bit':
-        lib_path = os.path.join(os.path.dirname(__file__), "libencrypt-linux-arm-32.so")
+        lib_name = "libencrypt-linux-arm-32.so"
+
+    elif os.uname()[4].startswith("aarch64") and platform.architecture()[0] == '64bit':
+        lib_name = "libencrypt-linux-arm-64.so"
 
     elif sys.platform.startswith('linux'):
-        if platform.architecture()[0] == '64bit':
-            lib_path = os.path.join(os.path.dirname(__file__), "libencrypt-linux-x86-64.so")
+        if "centos" in platform.platform():
+            if platform.architecture()[0] == '64bit':
+                lib_name = "libencrypt-centos-x86-64.so"
+            else:
+                lib_name = "libencrypt-linux-x86-32.so"
         else:
-            lib_path = os.path.join(os.path.dirname(__file__), "libencrypt-linux-x86-32.so")
+            if platform.architecture()[0] == '64bit':
+                lib_name = "libencrypt-linux-x86-64.so"
+            else:
+                lib_name = "libencrypt-linux-x86-32.so"
 
-    elif sys.platform.startswith('freebsd-10'):
-        lib_path = os.path.join(os.path.dirname(__file__), "libencrypt-freebsd10-64.so") 
+    elif sys.platform.startswith('freebsd'):
+        lib_name = "libencrypt-freebsd-64.so"
 
     else:
         err = "Unexpected/unsupported platform '{}'".format(sys.platform)
         log.error(err)
         raise Exception(err)
+
+    lib_path = os.path.join(os.path.dirname(__file__), "libencrypt", lib_name)
 
     if not os.path.isfile(lib_path):
         err = "Could not find {} encryption library {}".format(sys.platform, lib_path)

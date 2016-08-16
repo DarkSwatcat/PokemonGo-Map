@@ -269,6 +269,7 @@ class Pokestop(BaseModel):
     longitude = DoubleField()
     last_modified = DateTimeField(index=True)
     lure_expiration = DateTimeField(null=True, index=True)
+    active_pokemon_id = IntegerField(null=True, index=True)
     active_fort_modifier = CharField(max_length=50, null=True)
 
     class Meta:
@@ -426,7 +427,8 @@ def parse_map(map_dict, step_location):
                 
         for f in cell.get('forts', []):
             if config['parse_pokestops'] and f.get('type') == 1:  # Pokestops
-                if 'active_fort_modifier' in f:
+                if "active_fort_modifier" in f:
+                    active_fort_modifier = f["active_fort_modifier"]
                     lure_expiration = datetime.utcfromtimestamp(
                          f['last_modified_timestamp_ms'] / 1000.0) + timedelta(minutes=30)
 
@@ -434,7 +436,7 @@ def parse_map(map_dict, step_location):
                     if diff.total_seconds() < 0:
                         lure_expiration = None
                 else:
-                    lure_expiration = None
+                    lure_expiration, active_fort_modifier = None, None
 
                 if 'map_pokemon' in f:
                     active_pokemon_expiration = datetime.utcfromtimestamp(
@@ -490,6 +492,7 @@ def parse_map(map_dict, step_location):
                     'last_modified': datetime.utcfromtimestamp(
                         f['last_modified_timestamp_ms'] / 1000.0),
                     'lure_expiration': lure_expiration,
+                    'active_fort_modifier': active_fort_modifier,
                     'active_pokemon_id': active_pokemon_id
                 }
 

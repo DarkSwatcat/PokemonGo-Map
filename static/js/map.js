@@ -1067,31 +1067,47 @@ function pokestopLabel (lured, lastModified, activePokemonId, latitude, longitud
 
     var expireDate = new Date(currentDate.getTime() + timeUntilExpire)
     var expireTime = expireDate.getTime()
-
-    str = `
-      <div>
-        <b>Lured Pokéstop</b>
-      </div>
-      <div>
-        Lured Pokémon: ${activePokemonName}
-        <span> - </span>
-        <small>
-          <a href='http://www.pokemon.com/us/pokedex/${activePokemonId}' target='_blank' title='View in Pokedex'>#${activePokemonId}</a>
-        </small>
-        <span> ${rarityDisplay}</span>
-        <span> - </span>
-        <span>${typesDisplay}</span>
-      </div>
-      <div>
-        Lure expires at ${pad(expireDate.getHours())}:${pad(expireDate.getMinutes())}:${pad(expireDate.getSeconds())}
-        <span class='label-countdown' disappears-at='${expireTime}'>(00m00s)</span>
-      </div>
-      <div>
-        Location: ${latitude.toFixed(6)}, ${longitude.toFixed(7)}
-      </div>
-      <div>
-        <a href='https://www.google.com/maps/dir/Current+Location/${latitude},${longitude}' target='_blank' title='View in Maps'>Get directions</a>
-      </div>`
+    if(activePokemonId == null){
+      str = `
+        <div>
+          <b>Lured Pokéstop</b>
+        </div>
+        <div>
+          Lure expires at ${pad(expireDate.getHours())}:${pad(expireDate.getMinutes())}:${pad(expireDate.getSeconds())}
+          <span class='label-countdown' disappears-at='${expireTime}'>(00m00s)</span>
+        </div>
+        <div>
+          Location: ${latitude.toFixed(6)}, ${longitude.toFixed(7)}
+        </div>
+        <div>
+          <a href='https://www.google.com/maps/dir/Current+Location/${latitude},${longitude}' target='_blank' title='View in Maps'>Get directions</a>
+        </div>`
+    }else{
+      str = `
+        <div>
+          <b>Lured Pokéstop</b>
+        </div>
+        <div>
+          Lured Pokémon: ${activePokemonName}
+          <span> - </span>
+          <small>
+            <a href='http://www.pokemon.com/us/pokedex/${activePokemonId}' target='_blank' title='View in Pokedex'>#${activePokemonId}</a>
+          </small>
+          <span> ${rarityDisplay}</span>
+          <span> - </span>
+          <span>${typesDisplay}</span>
+        </div>
+        <div>
+          Lure expires at ${pad(expireDate.getHours())}:${pad(expireDate.getMinutes())}:${pad(expireDate.getSeconds())}
+          <span class='label-countdown' disappears-at='${expireTime}'>(00m00s)</span>
+        </div>
+        <div>
+          Location: ${latitude.toFixed(6)}, ${longitude.toFixed(7)}
+        </div>
+        <div>
+          <a href='https://www.google.com/maps/dir/Current+Location/${latitude},${longitude}' target='_blank' title='View in Maps'>Get directions</a>
+        </div>`
+    }
   } else {
     str = `
       <div>

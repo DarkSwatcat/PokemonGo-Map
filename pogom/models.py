@@ -4,6 +4,7 @@
 import logging
 import os
 import calendar
+import copy
 from peewee import Model, SqliteDatabase, InsertQuery,\
                    IntegerField, CharField, DoubleField, BooleanField,\
                    DateTimeField, OperationalError, create_model_tables, fn
@@ -22,6 +23,8 @@ log = logging.getLogger(__name__)
 
 args = get_args()
 flaskDb = FlaskDB()
+
+pokemonLured = {}
 
 
 class MyRetryDB(RetryOperationalError, PooledMySQLDatabase):
@@ -71,6 +74,7 @@ class Pokemon(BaseModel):
     latitude = DoubleField()
     longitude = DoubleField()
     disappear_time = DateTimeField(index=True)
+    is_lured = BooleanField()
 
     class Meta:
         indexes = ((('latitude', 'longitude'), False),)
@@ -295,46 +299,64 @@ def parse_map(map_dict, step_location):
 
     cells = map_dict['responses']['GET_MAP_OBJECTS']['map_cells']
     for cell in cells:
+        now = datetime.utcnow()
         if config['parse_pokemon']:
             for p in cell.get('catchable_pokemons', []):
                 d_t = datetime.utcfromtimestamp(p['expiration_timestamp_ms'] / 1000.0)
-                pokemons[p['encounter_id']] = {
-                    'encounter_id': b64encode(str(p['encounter_id'])),
-                    'spawnpoint_id': p['spawn_point_id'],
-                    'pokemon_id': p['pokemon_id'],
-                    'latitude': p['latitude'],
-                    'longitude': p['longitude'],
-                    'disappear_time': d_t
-                }
+                diff = d_t - now
+                if diff.total_seconds() < 1500:
+                    pokemons[p['encounter_id']] = {
+                        'encounter_id': b64encode(str(p['encounter_id'])),
+                        'spawnpoint_id': p['spawn_point_id'],
+                        'pokemon_id': p['pokemon_id'],
+                        'latitude': p['latitude'],
+                        'longitude': p['longitude'],
+                        'disappear_time': d_t
+                    }
             for p in cell.get('wild_pokemons', []):
                 d_t = datetime.utcfromtimestamp(
                     (p['last_modified_timestamp_ms'] +
                      p['time_till_hidden_ms']) / 1000.0)
-                pokemons[p['encounter_id']] = {
-                    'encounter_id': b64encode(str(p['encounter_id'])),
-                    'spawnpoint_id': p['spawn_point_id'],
-                    'pokemon_id': p['pokemon_data']['pokemon_id'],
-                    'latitude': p['latitude'],
-                    'longitude': p['longitude'],
-                    'disappear_time': d_t
-                }
+                diff = d_t - now
+                if diff.total_seconds() < 1500:
+                    pokemons[p['encounter_id']] = {
+                        'encounter_id': b64encode(str(p['encounter_id'])),
+                        'spawnpoint_id': p['spawn_point_id'],
+                        'pokemon_id': p['pokemon_data']['pokemon_id'],
+                        'latitude': p['latitude'],
+                        'longitude': p['longitude'],
+                        'disappear_time': d_t
+                    }
             # Do Console Print and Webhook stuff
             for p in pokemons.values():
                 printPokemon(p['pokemon_id'], p['latitude'], 
                              p['longitude'], p['disappear_time'])
+
                 p['is_lured'] = False
                 send_to_webhook('pokemon', p)
+
                 
         for f in cell.get('forts', []):
             if config['parse_pokestops'] and f.get('type') == 1:  # Pokestops
-                if 'lure_info' in f:
+                if 'active_fort_modifier' in f:
                     lure_expiration = datetime.utcfromtimestamp(
-                        f['lure_info']['lure_expires_timestamp_ms'] / 1000.0)
-                    active_pokemon_id = f['lure_info']['active_pokemon_id']
-                    encounter_id = f['lure_info']['encounter_id']
+                         f['last_modified_timestamp_ms'] / 1000.0) + timedelta(minutes=30)
+                else:
+                    lure_expiration = None
+
+                if 'map_pokemon' in f:
+                    active_pokemon_expiration = datetime.utcfromtimestamp(
+                        f['map_pokemon']['expiration_timestamp_ms'] / 1000.0)
+                    active_pokemon_id = f['map_pokemon']['pokemon_id']
+                    encounter_id = f['map_pokemon']['encounter_id']
+
+                    active_pokemon_spawn_point_id = f['map_pokemon']['spawn_point_id']
+                    active_pokemon_encounter_id = b64encode(str(encounter_id))
+
                     webhook_data = {
-                        'encounter_id': b64encode(str(encounter_id)),
+                        'encounter_id': active_pokemon_encounter_id,
                         'pokemon_id': active_pokemon_id,
+                        'pokemon_expiration': calendar.timegm(active_pokemon_expiration.timetuple()),
                         'latitude': f['latitude'],
                         'longitude': f['longitude'],
                         'disappear_time': calendar.timegm(lure_expiration.timetuple()),
@@ -342,8 +364,31 @@ def parse_map(map_dict, step_location):
                         'is_lured': True
                     }
                     send_to_webhook('pokemon', webhook_data)
+
+                    pokemons[active_pokemon_encounter_id] = {
+                        'encounter_id': active_pokemon_encounter_id,
+                        'spawnpoint_id': active_pokemon_spawn_point_id,
+                        'pokemon_id': active_pokemon_id,
+                        'latitude': f['latitude'] - 0.00001,
+                        'longitude': f['longitude'] + 0.00001,
+                        'disappear_time': active_pokemon_expiration,
+                        'is_lured': True
+                    }
+
+                    pokemonLured[f['id']] = {"active_pokemon_id": active_pokemon_id, "active_pokemon_expiration": active_pokemon_expiration, "active_pokemon_encounter_id": active_pokemon_encounter_id}
                 else:
-                    lure_expiration, active_pokemon_id = None, None
+                    active_pokemon_id, active_pokemon_expiration, active_pokemon_encounter_id = None, None, None
+
+                
+                if active_pokemon_id is None and 'active_fort_modifier' in f:
+                    if f['id'] in pokemonLured:
+                        active_pokemon_id = pokemonLured[f['id']]["active_pokemon_id"]
+                        active_pokemon_expiration = pokemonLured[f['id']]["active_pokemon_expiration"]
+                        active_pokemon_encounter_id = pokemonLured[f['id']]["active_pokemon_encounter_id"]
+
+                        diff = active_pokemon_expiration - now
+                        if diff.total_seconds() < 0:
+                            active_pokemon_id, active_pokemon_expiration, active_pokemon_encounter_id = None, None, None
 
                 pokestops[f['id']] = {
                     'pokestop_id': f['id'],

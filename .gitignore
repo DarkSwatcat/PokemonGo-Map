@@ -13,3 +13,5 @@ src/
 _build
 _build_html
 beehive.*
+
+.DS_Store
